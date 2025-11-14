@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Black Hole Demo — HTML / CSS / JS</title>
+<style>
+  :root{
+    --bg:#07010a;
+    --ui-bg: rgba(255,255,255,0.03);
+    --accent: #7bdfff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#ddd;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  #container{display:flex;gap:12px;align-items:flex-start;padding:12px}
+  #canvas{background: radial-gradient(ellipse at center, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.0) 40%), var(--bg); border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.8); cursor:crosshair;}
+  .panel{width:320px; padding:12px; border-radius:8px; background:linear-gradient(180deg,var(--ui-bg), rgba(255,255,255,0.01)); backdrop-filter: blur(6px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.02)}
+  h1{font-size:18px;margin:0 0 8px 0}
+  label{display:block;font-size:13px;margin:8px 0 4px;color:#bfcbd6}
+  input[type=range]{width:100%}
+  .small{font-size:12px;color:#9aa7b2;margin-top:8px}
+  button{margin-top:10px;padding:8px 10px;border-radius:6px;border:0;background:var(--accent);color:#042;cursor:pointer}
+  .footer{font-size:12px;color:#92a0aa;margin-top:10px}
+  .hint{font-size:13px;color:#cfefff;margin-top:6px}
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="canvas" width="960" height="640"></canvas>
+
+  <div class="panel">
+    <h1>Black Hole Demo</h1>
+    <div class="hint">Click the canvas to spawn an asteroid. Drag mouse to move the black hole.</div>
+
+    <label>Gravity Strength <span id="gVal">1400</span></label>
+    <input id="gravity" type="range" min="200" max="4000" value="1400">
+
+    <label>Event Horizon Radius <span id="hVal">36</span></label>
+    <input id="horizon" type="range" min="8" max="120" value="36">
+
+    <label>Accretion Disk Speed <span id="sVal">0.9</span></label>
+    <input id="diskSpeed" type="range" min="0" max="4" step="0.1" value="0.9">
+
+    <label>Spawn Velocity Multiplier <span id="vVal">1.0</span></label>
+    <input id="spawnVel" type="range" min="0" max="3" step="0.1" value="1.0">
+
+    <button id="clearBtn">Clear Asteroids</button>
+
+    <div class="footer">
+      <strong>How it works:</strong>
+      <ul style="padding-left:18px;margin:6px 0 0 0">
+        <li>Objects feel an inverse-square gravity toward the hole</li>
+        <li>When inside the event horizon, objects are removed</li>
+        <li>Accretion disk is drawn as rotating particles for a visual effect</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Black Hole Demo
+   - Canvas-based 2D simulation
+   - Click to spawn asteroids
+   - Drag black hole to move it
+   - Adjustable gravity, horizon radius, disk speed
+*/
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const gravitySlider = document.getElementById('gravity');
+const horizonSlider = document.getElementById('horizon');
+const diskSpeedSlider = document.getElementById('diskSpeed');
+const spawnVelSlider = document.getElementById('spawnVel');
+
+const gVal = document.getElementById('gVal');
+const hVal = document.getElementById('hVal');
+const sVal = document.getElementById('sVal');
+const vVal = document.getElementById('vVal');
+
+const clearBtn = document.getElementById('clearBtn');
+
+let W = canvas.width = canvas.clientWidth;
+let H = canvas.height = canvas.clientHeight;
+
+window.addEventListener('resize', () => {
+  W = canvas.width = canvas.clientWidth;
+  H = canvas.height = canvas.clientHeight;
+});
+
+class Body {
+  constructor(x,y, vx=0, vy=0, r=6, color='#c9c9c9'){
+    this.x = x; this.y = y;
+    this.vx = vx; this.vy = vy;
+    this.r = r;
+    this.color = color;
+    this.mass = Math.max(1, r); // simple mass
+  }
+  update(dt){
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+  }
+  draw(ctx){
+    ctx.beginPath();
+    ctx.fillStyle = this.color;
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+    ctx.fill();
+    // soft highlight
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.arc(this.x - this.r*0.4, this.y - this.r*0.4, this.r*0.6, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+class BlackHole {
+  constructor(x,y){
+    this.x = x; this.y = y;
+    this.gravity = parseFloat(gravitySlider.value); // G * mass combined
+    this.horizon = parseFloat(horizonSlider.value); // swallow radius
+    this.diskSpeed = parseFloat(diskSpeedSlider.value);
+    this.diskParticles = [];
+    this.diskRadius = this.horizon*3.3;
+    this.diskRotation = 0;
+    this.initDisk();
+  }
+  initDisk(){
+    this.diskParticles = [];
+    for(let i=0;i<160;i++){
+      let r = this.diskRadius * (0.6 + Math.random()*0.4);
+      let angle = Math.random()*Math.PI*2;
+      let size = 1 + Math.random()*3;
+      let col = `hsl(${200 + Math.random()*40}, 90%, ${45 + Math.random()*20}%)`;
+      this.diskParticles.push({r, angle, size, col, offset: Math.random()*2});
+    }
+  }
+  updateParams(){
+    this.gravity = parseFloat(gravitySlider.value);
+    this.horizon = parseFloat(horizonSlider.value);
+    this.diskSpeed = parseFloat(diskSpeedSlider.value);
+    this.diskRadius = this.horizon*3.3;
+    gVal.textContent = Math.round(this.gravity);
+    hVal.textContent = Math.round(this.horizon);
+    sVal.textContent = this.diskSpeed.toFixed(1);
+  }
+  update(dt){
+    this.diskRotation += this.diskSpeed * dt * 0.6;
+    // slowly pulse disk particles radius
+    for(let p of this.diskParticles){
+      p.r = this.diskRadius * (0.6 + 0.4 * Math.sin(performance.now()*0.0005 + p.offset));
+      p.angle += (0.3 + 0.7*(p.r/this.diskRadius)) * dt * this.diskSpeed * 0.2;
+    }
+  }
+  draw(ctx){
+    // Draw gravitational distortion ring (subtle)
+    const grad = ctx.createRadialGradient(this.x, this.y, this.horizon*0.6, this.x, this.y, this.diskRadius*1.05);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.5, 'rgba(10,10,12,0.8)');
+    grad.addColorStop(1, 'rgba(30,40,60,0.0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.diskRadius*1.1, 0, Math.PI*2);
+    ctx.fill();
+
+    // Draw accretion disk particles (rotating ring)
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    for(let p of this.diskParticles){
+      const x = Math.cos(p.angle)*p.r;
+      const y = Math.sin(p.angle)*p.r*0.5; // squash for perspective
+      ctx.beginPath();
+      ctx.fillStyle = p.col;
+      ctx.ellipse(x, y, p.size, p.size*0.6, p.angle, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Glow/fresnel ring
+    ctx.beginPath();
+    const glow = ctx.createRadialGradient(this.x, this.y, this.horizon*0.9, this.x, this.y, this.horizon*2.8);
+    glow.addColorStop(0, 'rgba(255,255,255,0.02)');
+    glow.addColorStop(0.4, 'rgba(123,223,255,0.06)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.arc(this.x, this.y, this.horizon*2.8, 0, Math.PI*2);
+    ctx.fill();
+
+    // Event horizon (solid black center)
+    ctx.beginPath();
+    ctx.fillStyle = 'black';
+    ctx.arc(this.x, this.y, this.horizon, 0, Math.PI*2);
+    ctx.fill();
+
+    // Subtle rim highlight
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(200,230,255,0.06)';
+    ctx.lineWidth = Math.max(1, this.horizon*0.08);
+    ctx.arc(this.x, this.y, this.horizon*1.15, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+// Simulation state
+const bodies = [];
+const bh = new BlackHole(W/2, H/2);
+
+function spawnAsteroid(x,y, speed=1.0){
+  // random size and direction
+  const r = 4 + Math.random()*10;
+  const angle = Math.random()*Math.PI*2;
+  const speedFactor = speed * parseFloat(spawnVelSlider.value);
+  const vx = Math.cos(angle)* (20 + Math.random()*80) * 0.02 * speedFactor;
+  const vy = Math.sin(angle)* (20 + Math.random()*80) * 0.02 * speedFactor;
+  const col = `hsl(${Math.floor(Math.random()*40)+20}, 60%, ${40+Math.random()*30}%)`;
+  bodies.push(new Body(x, y, vx, vy, r, col));
+}
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  spawnAsteroid(x, y, 1.0);
+});
+
+// Drag black hole
+let draggingBH = false;
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+  const dist = Math.hypot(mx - bh.x, my - bh.y);
+  if(dist < bh.diskRadius*0.9) draggingBH = true;
+});
+window.addEventListener('mouseup', () => draggingBH = false);
+canvas.addEventListener('mousemove', (e) => {
+  if(!draggingBH) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+  bh.x = mx; bh.y = my;
+});
+
+// UI controls binding
+gravitySlider.addEventListener('input', ()=>{ bh.updateParams(); });
+horizonSlider.addEventListener('input', ()=>{ bh.updateParams(); bh.initDisk(); });
+diskSpeedSlider.addEventListener('input', ()=>{ bh.updateParams(); });
+spawnVelSlider.addEventListener('input', ()=>{ vVal.textContent = parseFloat(spawnVelSlider.value).toFixed(1); });
+spawnVelSlider.dispatchEvent(new Event('input'));
+
+clearBtn.addEventListener('click', ()=>{ bodies.length = 0; });
+
+// Main animation loop
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.032, (now - last) / 1000); // cap dt for stability
+  last = now;
+
+  // update
+  bh.update(dt);
+
+  // physics: gravitational pull
+  for(let i=bodies.length-1;i>=0;i--){
+    const b = bodies[i];
+    // vector from body to black hole
+    let dx = bh.x - b.x;
+    let dy = bh.y - b.y;
+    let dist2 = dx*dx + dy*dy;
+    let dist = Math.sqrt(dist2);
+
+    // if inside event horizon -> remove
+    if(dist < bh.horizon + b.r*0.5){
+      // spawn tiny particles on swallow (visual pop)
+      for(let p=0;p<8;p++){
+        // quick visual: we won't keep them (performance), but draw ephemeral here could be added
+      }
+      bodies.splice(i,1);
+      continue;
+    }
+
+    // prevent division by zero and cap min distance
+    const safeDist = Math.max(dist, bh.horizon*0.9);
+    // inverse-square gravity: a = G * mass / r^2
+    // our bh.gravity acts like G * bhMass combined to simplify
+    const accelMag = bh.gravity / (safeDist * safeDist);
+    // limit acceleration to avoid explosion for tiny r
+    const maxAccel = 2000;
+    const ax = (dx / safeDist) * Math.min(accelMag, maxAccel);
+    const ay = (dy / safeDist) * Math.min(accelMag, maxAccel);
+
+    // apply acceleration to velocity
+    b.vx += ax * dt;
+    b.vy += ay * dt;
+
+    // optional small orbital tangential impulse for visual orbiting
+    // compute tangential vector (perp)
+    const tangential = 0.02 * (1 / Math.max(1, safeDist/100)) * (bh.diskSpeed);
+    b.vx += -dy/dist * tangential * dt * 60;
+    b.vy += dx/dist * tangential * dt * 60;
+
+    // update position
+    b.update(dt);
+
+    // simple screen wrap for fun
+    if(b.x < -50) b.x = W+50;
+    if(b.x > W+50) b.x = -50;
+    if(b.y < -50) b.y = H+50;
+    if(b.y > H+50) b.y = -50;
+  }
+
+  // draw
+  ctx.clearRect(0,0,W,H);
+
+  // subtle starfield background
+  drawStarfield();
+
+  // draw bodies (behind disk)
+  for(const b of bodies) b.draw(ctx);
+
+  // draw black hole on top
+  bh.draw(ctx);
+
+  // HUD (count)
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.font = '13px system-ui,Segoe UI,Roboto';
+  ctx.fillText(`Asteroids: ${bodies.length}`, 14, 22);
+  ctx.fillText(`Drag black hole; Click to spawn`, 14, 40);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Starfield (persistent-ish)
+const stars = [];
+for(let i=0;i<180;i++){
+  stars.push({x: Math.random()*W, y: Math.random()*H, s: Math.random()*1.6, a: Math.random()*0.7+0.15});
+}
+function drawStarfield(){
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for(const s of stars){
+    ctx.beginPath();
+    ctx.fillStyle = `rgba(200,220,255,${s.a})`;
+    ctx.arc(s.x, s.y, s.s, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// initial population (random asteroids)
+for(let i=0;i<18;i++){
+  spawnAsteroid(Math.random()*W, Math.random()*H, 1.0);
+}
+</script>
+</body>
+</html>
